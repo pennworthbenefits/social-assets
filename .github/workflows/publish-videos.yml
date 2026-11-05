@@ -1,0 +1,62 @@
+# Publishes only the videos saved in the last 60 days to GitHub Pages (Ronnie, 5 Nov 2026).
+# Pages used to publish the whole repo (about 1.4 GB of slide pictures), past GitHub's 1 GB limit.
+# Only videos are fetched from Pages (Planable copies each one when it is staged). Pictures use
+# raw.githubusercontent.com and jsDelivr, which this does not touch. The repo still keeps every file.
+# Source copy: deploy/social-assets/publish-videos.yml in the Pennworth AI Agents repo.
+name: Publish videos
+on:
+  push:
+    branches: [main]
+    paths: ['**.mp4', '.github/workflows/publish-videos.yml']
+  schedule:
+    - cron: '17 7 * * *'   # daily, so a video leaves the site 60 days after it was saved even with no new push
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'One more video path to publish even if older than 60 days (for re-staging an old video)'
+        required: false
+        default: ''
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            *.mp4
+          sparse-checkout-cone-mode: false
+      - name: Pick the videos saved in the last 60 days
+        env:
+          KEEP: ${{ inputs.keep }}
+        run: |
+          set -euo pipefail
+          cutoff=$(( $(date +%s) - 60*86400 ))
+          mkdir -p _site
+          echo '<!doctype html><title>Pennworth videos</title>' > _site/index.html
+          git ls-files -z -- '*.mp4' | while IFS= read -r -d '' f; do
+            t=$(git log -1 --format=%ct -- "$f")
+            if [ "${t:-0}" -ge "$cutoff" ] || [ "$f" = "${KEEP:-}" ]; then
+              mkdir -p "_site/$(dirname "$f")"; cp "$f" "_site/$f"; echo "published: $f"
+            else
+              echo "left out (saved more than 60 days ago): $f"
+            fi
+          done
+          du -sh _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
